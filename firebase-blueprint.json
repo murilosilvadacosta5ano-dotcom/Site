@@ -1,0 +1,35 @@
+{
+  "entities": {
+    "Post": {
+      "title": "Post",
+      "description": "A community post in Kaise Studios.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The text content of the post."
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional image URL for the post."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the post was created."
+        },
+        "authorId": {
+          "type": "string",
+          "description": "The UID of the author."
+        }
+      },
+      "required": ["content", "createdAt", "authorId"]
+    }
+  },
+  "firestore": {
+    "/posts/{postId}": {
+      "schema": "Post",
+      "description": "Collection of community posts."
+    }
+  }
+}

@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner() {
+      return isAuthenticated() && request.auth.token.email == "murilosilvadacosta5ano@gmail.com";
+    }
+
+    function isValidPost(data) {
+      return data.content is string && 
+             data.content.size() > 0 && 
+             data.content.size() < 5000 &&
+             data.createdAt is string &&
+             data.authorId == request.auth.uid;
+    }
+
+    match /posts/{postId} {
+      // Everyone can read posts
+      allow read: if true;
+      
+      // Only the specific email can create posts
+      allow create: if isOwner() && isValidPost(request.resource.data);
+      
+      // Only the specific email can delete posts
+      allow delete: if isOwner();
+      
+      // No updates allowed for now as per request (only post and delete)
+      allow update: if false;
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
