@@ -334,14 +334,15 @@ export default function App() {
     return () => unsubscribes.forEach(unsub => unsub());
   }, [user, posts.length]);
 
-  const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error) {
-      console.error("Login Error:", error);
-    }
-  };
+const handleLogin = async () => {
+  alert("clicou login"); // 👈 TESTE
 
+  try {
+    await signInWithPopup(auth, googleProvider);
+  } catch (error) {
+    console.error("Login Error:", error);
+  }
+};
   const handleLogout = async () => {
     try {
       await signOut(auth);
