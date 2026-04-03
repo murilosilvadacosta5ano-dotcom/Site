@@ -8,9 +8,7 @@ import {
   onSnapshot, 
   deleteDoc, 
   doc,
-  getDocFromServer,
   runTransaction,
-  serverTimestamp,
   increment,
   setDoc,
   getDoc
@@ -18,7 +16,7 @@ import {
 
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
-import { auth, db, storage, googleProvider, handleFirestoreError, OperationType } from './firebase.ts';
+import { auth, db, storage, googleProvider, handleFirestoreError, OperationType } from './firebase';
 
 import { 
   LogIn, 
