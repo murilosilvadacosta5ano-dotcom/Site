@@ -1,12 +1,6 @@
 // teste deploy
 import { useState, useEffect, useRef } from 'react';
 import { 
-  signInWithPopup, 
-  signOut, 
-  onAuthStateChanged, 
-  User 
-} from 'firebase/auth';
-import { 
   collection, 
   addDoc, 
   query, 
@@ -21,8 +15,11 @@ import {
   setDoc,
   getDoc
 } from 'firebase/firestore';
+
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { auth, db, storage, googleProvider, handleFirestoreError, OperationType } from './firebase';
+
+import { auth, db, storage, googleProvider, handleFirestoreError, OperationType } from './firebase.ts';
+
 import { 
   LogIn, 
   LogOut, 
