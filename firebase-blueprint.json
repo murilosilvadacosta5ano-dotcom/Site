@@ -21,15 +21,50 @@
         "authorId": {
           "type": "string",
           "description": "The UID of the author."
+        },
+        "likesCount": {
+          "type": "integer",
+          "description": "Number of likes on the post."
         }
       },
       "required": ["content", "createdAt", "authorId"]
+    },
+    "Like": {
+      "title": "Like",
+      "description": "A like on a post.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a post.",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorPhoto": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["content", "authorId", "authorName", "createdAt"]
     }
   },
   "firestore": {
     "/posts/{postId}": {
       "schema": "Post",
       "description": "Collection of community posts."
+    },
+    "/posts/{postId}/likes/{userId}": {
+      "schema": "Like",
+      "description": "Users who liked the post."
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on the post."
     }
   }
 }

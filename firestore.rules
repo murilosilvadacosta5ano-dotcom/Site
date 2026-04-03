@@ -1,35 +1,136 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: posts
+    // Document ID: auto-generated
+    // Fields:
+    //   - content: string (required, 1-5000 chars) - The post text
+    //   - imageUrl: string (optional, URL) - Optional image
+    //   - createdAt: string (required, ISO 8601) - Creation timestamp
+    //   - authorId: string (required) - UID of the creator
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    function isOwner() {
-      return isAuthenticated() && request.auth.token.email == "murilosilvadacosta5ano@gmail.com";
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          ((request.auth.token.email == "murilosilvadac8@gmail.com" || request.auth.token.email == "murilosilvadacosta5ano@gmail.com") && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
 
     function isValidPost(data) {
-      return data.content is string && 
-             data.content.size() > 0 && 
-             data.content.size() < 5000 &&
-             data.createdAt is string &&
-             data.authorId == request.auth.uid;
+      return hasRequiredFields(['content', 'createdAt', 'authorId']) &&
+             hasOnlyAllowedFields(['content', 'imageUrl', 'createdAt', 'authorId', 'likesCount']) &&
+             data.content is string && data.content.size() <= 5000 &&
+             (data.content.size() > 0 || ('imageUrl' in data && isValidUrl(data.imageUrl))) &&
+             (!('imageUrl' in data) || isValidUrl(data.imageUrl)) &&
+             isValidDateString(data.createdAt) &&
+             data.authorId == request.auth.uid &&
+             (!('likesCount' in data) || data.likesCount == 0);
     }
 
+    function isValidLike(data) {
+      return hasRequiredFields(['userId', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidComment(data) {
+      return hasRequiredFields(['content', 'authorId', 'authorName', 'createdAt']) &&
+             hasOnlyAllowedFields(['content', 'authorId', 'authorName', 'authorPhoto', 'createdAt']) &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 1000 &&
+             data.authorId == request.auth.uid &&
+             data.authorName is string && data.authorName.size() < 100 &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidCounterUpdate(postId) {
+      let oldLikes = resource.data.get('likesCount', 0);
+      let newLikes = request.resource.data.likesCount;
+      
+      // Allow update only if 'likesCount' is the ONLY field changing
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount']) &&
+             // And the change is exactly +1 or -1
+             newLikes is number &&
+             newLikes >= 0 &&
+             math.abs(newLikes - oldLikes) == 1 &&
+             // Verify consistency:
+             (
+               // Increment: Like must NOT exist before, but MUST exist after
+               (newLikes > oldLikes &&
+                !exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)) &&
+                existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid))) ||
+               // Decrement: Like MUST exist before, but must NOT exist after
+               (newLikes < oldLikes &&
+                exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)) &&
+                !existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)))
+             );
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
     match /posts/{postId} {
-      // Everyone can read posts
       allow read: if true;
+      allow create: if isAdmin() && isValidPost(request.resource.data);
+      allow delete: if isAdmin();
       
-      // Only the specific email can create posts
-      allow create: if isOwner() && isValidPost(request.resource.data);
-      
-      // Only the specific email can delete posts
-      allow delete: if isOwner();
-      
-      // No updates allowed for now as per request (only post and delete)
-      allow update: if false;
+      // Allow users to update the likesCount counter
+      allow update: if isAuthenticated() && isValidCounterUpdate(postId);
+
+      match /likes/{userId} {
+        allow read: if true;
+        allow create: if isAuthenticated() && userId == request.auth.uid && isValidLike(request.resource.data);
+        allow delete: if isAuthenticated() && userId == request.auth.uid;
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isAuthenticated() && isValidComment(request.resource.data);
+        allow delete: if isAuthenticated() && (request.auth.uid == resource.data.authorId || isAdmin());
+        allow update: if false;
+      }
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isAdmin();
     }
     
     // Default deny

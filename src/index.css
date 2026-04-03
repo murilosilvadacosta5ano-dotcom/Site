@@ -1,1 +1,53 @@
 @import "tailwindcss";
+
+html {
+  font-size: 75%;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --radius-4xl: 32px;
+  --radius-5xl: 40px;
+}
+
+@utility liquid-glass {
+  background: #1A1A1A;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+@utility liquid-refraction {
+  background: #2A2A2A;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: #333333;
+  }
+
+  &:active {
+    background: #444444;
+    transform: scale(0.98);
+  }
+}
+
+@keyframes liquid-shimmer {
+  0%, 100% { transform: translate(-2%, -2%) scale(1); opacity: 0.4; }
+  50% { transform: translate(2%, 2%) scale(1.05); opacity: 0.6; }
+}
+
+@utility liquid-glass-dark {
+  background: #121212;
+  backdrop-filter: blur(2px);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+}
+
+@keyframes gradientMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animated-bg {
+  background: #0A0A0A;
+}
