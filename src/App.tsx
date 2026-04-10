@@ -1,5 +1,10 @@
-// teste deploy
 import { useState, useEffect, useRef } from 'react';
+import { 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  User 
+} from 'firebase/auth';
 import { 
   collection, 
   addDoc, 
@@ -8,16 +13,15 @@ import {
   onSnapshot, 
   deleteDoc, 
   doc,
+  getDocFromServer,
   runTransaction,
+  serverTimestamp,
   increment,
   setDoc,
   getDoc
 } from 'firebase/firestore';
-
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-
 import { auth, db, storage, googleProvider, handleFirestoreError, OperationType } from './firebase';
-
 import { 
   LogIn, 
   LogOut, 
@@ -330,15 +334,14 @@ export default function App() {
     return () => unsubscribes.forEach(unsub => unsub());
   }, [user, posts.length]);
 
-const handleLogin = async () => {
-  alert("clicou login"); // 👈 TESTE
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login Error:", error);
+    }
+  };
 
-  try {
-    await signInWithPopup(auth, googleProvider);
-  } catch (error) {
-    console.error("Login Error:", error);
-  }
-};
   const handleLogout = async () => {
     try {
       await signOut(auth);
