@@ -39,20 +39,33 @@ import {
   Loader2,
   ShieldCheck,
   Home,
-  Cat,
-  Users
+  Cpu,
+  Search,
+  Users,
+  ArrowUp,
+  Mic,
+  Paperclip,
+  Zap,
+  History,
+  Key,
+  Bell,
+  Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { cn } from './lib/utils';
 import React from 'react';
 
 // Constants
+const GOOGLE_SEARCH_ICON = "https://www.google.com/favicon.ico";
 const OWNER_EMAILS = ["murilosilvadac8@gmail.com", "murilosilvadacosta5ano@gmail.com"];
+const SECRET_API_TOKEN = "nk_u0bc6hxrghdwplmhvt";
 const LOGO_URL = "https://cdn.discordapp.com/attachments/1484297535681204367/1489406511020249118/file_000000000bc471f5b358a2805acd8616.png?ex=69d04d68&is=69cefbe8&hm=d90fcc98d5d2157c389ffd3d2de4280d9edfa55a50b672d8cbdb84fe194a5969&";
 const OWNER_PHOTO_URL = "https://cdn.discordapp.com/attachments/1484297535681204367/1489317578513055764/noFilter.webp?ex=69cffa94&is=69cea914&hm=bb945f5324e34c7f3a7795ca87d79a850ce6cdef5c6b84a22d9c53ddaf6cee8c&";
-const COMMUNITY_IMAGE = "https://tr.rbxcdn.com/180DAY-61ac41ba6e6a114ddef418494fd4cb72/150/150/Image/Webp/noFilter";
+const ROBLOX_LOGO_URL = "https://cdn.pixabay.com/photo/2021/09/11/12/12/roblox-6615418_1280.png";
+const COMMUNITY_URL = "https://www.roblox.com/pt/communities/188678763/Kaise-Studios#!/about";
 
 interface Post {
   id: string;
@@ -268,11 +281,52 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [showWelcome, setShowWelcome] = useState(false);
   const [showPostModal, setShowPostModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'feed' | 'community'>('feed');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [floatingCommentId, setFloatingCommentId] = useState<string | null>(null);
   const [postToDelete, setPostToDelete] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [aiQuery, setAiQuery] = useState("");
+  const [isAiFocused, setIsAiFocused] = useState(false);
+  const [aiMessages, setAiMessages] = useState<{ role: 'user' | 'assistant', content: string, state?: 'searching' | 'thinking' | 'responding', sources?: any[] }[]>([]);
+  const [isChatActive, setIsChatActive] = useState(false);
+  const [notification, setNotification] = useState<string | null>(null);
+  const [apiToken, setApiToken] = useState<string | null>(SECRET_API_TOKEN);
+  const [chatHistory, setChatHistory] = useState<{id: string, title: string}[]>([]);
+  const [isLocalLinked, setIsLocalLinked] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Local Bridge Listener
+  useEffect(() => {
+    const bridgeRef = doc(db, 'config', 'local_bridge');
+    const unsubscribe = onSnapshot(bridgeRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setIsLocalLinked(data.activeToken === SECRET_API_TOKEN);
+      } else {
+        setIsLocalLinked(false);
+      }
+    }, (error) => {
+      console.warn("Bridge listener failed:", error);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Auto scroll to bottom of chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [aiMessages, aiMessages[aiMessages.length - 1]?.state]);
+
+  // Load chat history simulated
+  useEffect(() => {
+    const savedHistory = localStorage.getItem('nakamura_history');
+    if (savedHistory) setChatHistory(JSON.parse(savedHistory));
+  }, []);
+
+  const isSimpleQuestion = (text: string) => {
+    const simpleTerms = ['oi', 'olá', 'tudo bem', 'tchau', 'obrigado', 'vlw', 'bom dia', 'boa tarde', 'boa noite', 'hey', 'hello'];
+    return simpleTerms.some(term => text.toLowerCase().includes(term));
+  };
 
   // Welcome logic: Show only once
   useEffect(() => {
@@ -394,7 +448,6 @@ export default function App() {
       setImagePreview(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       setShowPostModal(false);
-      setActiveTab('feed');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, path);
     } finally {
@@ -454,9 +507,125 @@ export default function App() {
 
   const isOwner = user ? OWNER_EMAILS.includes(user.email || "") : false;
 
+  const handleAiSend = async () => {
+    if (!aiQuery.trim()) return;
+
+    const userMsg = aiQuery.trim();
+    setAiQuery("");
+    setIsChatActive(true);
+    
+    const newUserMessage = { role: 'user' as const, content: userMsg };
+    setAiMessages(prev => [...prev, newUserMessage]);
+
+    const simple = isSimpleQuestion(userMsg);
+
+    // Initial state
+    const aiResponseSlot = { 
+      role: 'assistant' as const, 
+      content: "", 
+      state: simple ? 'thinking' : 'searching' as any
+    };
+    setAiMessages(prev => [...prev, aiResponseSlot]);
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      const systemPrompt = `Você é a Nakamura IA. Fale de forma natural, direta e amigável.
+      Sua personalidade é baseada no Nakamura, mas sem clichês de RP ou monólogos internos.
+      Apenas responda como ele responderia: um pouco tímido, mas determinado e genuíno.
+      Não use "(vários pensamentos)" ou gagueiras em excesso no texto.
+      Seja prestativo e fale como um amigo.`;
+
+      if (!simple) {
+        await new Promise(r => setTimeout(r, 1200));
+        setAiMessages(prev => {
+          const last = [...prev];
+          last[last.length - 1] = { ...last[last.length - 1], state: 'thinking' };
+          return last;
+        });
+      } else {
+        // Just "pensando" wait
+        await new Promise(r => setTimeout(r, 600));
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: userMsg,
+        config: {
+          systemInstruction: systemPrompt,
+          tools: simple ? [] : [{ googleSearch: {} }],
+        },
+      });
+
+      const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const text = response.text || "Desculpe, não consegui processar sua solicitação.";
+
+      setAiMessages(prev => {
+        const last = [...prev];
+        last[last.length - 1] = { 
+          ...last[last.length - 1], 
+          content: text, 
+          state: 'responding',
+          sources: simple ? [] : sources
+        };
+        return last;
+      });
+
+      // Save to local history if it's the first message
+      if (aiMessages.length === 0) {
+        const newHistory = [{id: Date.now().toString(), title: userMsg.substring(0, 30)}, ...chatHistory].slice(0, 10);
+        setChatHistory(newHistory);
+        localStorage.setItem('nakamura_history', JSON.stringify(newHistory));
+      }
+
+    } catch (error: any) {
+      console.error("AI Error:", error);
+      const isQuotaError = error?.message?.includes('quota') || error?.message?.includes('Limit');
+      
+      if (isQuotaError) {
+        setNotification("hm acabou seus token desculpa!");
+        // Remove the empty thinking/searching bubble on quota error
+        setAiMessages(prev => prev.slice(0, -1));
+      } else {
+        setAiMessages(prev => {
+          const last = [...prev];
+          last[last.length - 1] = { 
+            ...last[last.length - 1], 
+            content: "Ocorreu um erro ao falar com a IA.", 
+            state: 'responding'
+          };
+          return last;
+        });
+      }
+    }
+  };
+
   return (
     <ErrorBoundary>
-      <div className="min-h-screen animated-bg text-zinc-900 font-sans selection:bg-blue-500/30 pb-32">
+      <div className="h-screen flex flex-col md:flex-row overflow-hidden bg-[#F7F7F8]">
+        {/* Notification Portal */}
+        <AnimatePresence>
+          {notification && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20, scale: 0.9 }}
+              animate={{ opacity: 1, y: 16, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="fixed top-0 left-0 right-0 z-[1000] flex justify-center pointer-events-none"
+            >
+              <div className="bg-[#0D0D0D] text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 pointer-events-auto border border-white/10" id="notification-bar">
+                <Bell size={18} className="text-yellow-500" />
+                <span className="text-sm font-bold">{notification}</span>
+                <button 
+                  onClick={() => setNotification(null)}
+                  className="ml-2 p-1 hover:bg-white/10 rounded-full transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Welcome Sheet */}
         <AnimatePresence>
           {showWelcome && (
@@ -464,31 +633,31 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
+              className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
             >
               <motion.div 
                 initial={{ scale: 0.9, y: 20 }}
                 animate={{ scale: 1, y: 0 }}
                 exit={{ scale: 0.9, y: 20 }}
-                className="w-full max-w-md bg-[#1A1A1A] rounded-3xl overflow-hidden shadow-2xl relative border border-white/10"
+                className="w-full max-w-md bg-white rounded-3xl overflow-hidden shadow-2xl relative border border-black/5"
               >
-                <div className="p-8 text-center">
-                  <div className="relative w-full aspect-video rounded-2xl overflow-hidden mb-6 shadow-lg border border-white/5">
-                    <img src="https://tr.rbxcdn.com/180DAY-61ac41ba6e6a114ddef418494fd4cb72/150/150/Image/Webp/noFilter" className="w-full h-full object-cover" alt="Welcome" />
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      <img src={LOGO_URL} className="w-24 h-24 object-contain drop-shadow-2xl" alt="Logo" />
+                <div className="p-8 text-center text-zinc-900">
+                  <div className="relative w-full aspect-video rounded-2xl overflow-hidden mb-6 shadow-lg border border-black/5">
+                    <img src={OWNER_PHOTO_URL} className="w-full h-full object-cover" alt="Welcome" />
+                    <div className="absolute inset-0 bg-black/10 flex items-center justify-center">
+                      <img src={LOGO_URL} className="w-24 h-24 object-contain drop-shadow-2xl invert" alt="Logo" />
                     </div>
                   </div>
-                  <h2 className="text-2xl font-bold mb-2 text-white">Welcome to Kaise Studios</h2>
-                  <p className="text-zinc-400 text-sm mb-8 leading-relaxed">
-                    Kaise Studios turns any Roblox game into a live community experience where every update counts.
+                  <h2 className="text-2xl font-bold mb-2 text-[#0D0D0D]">Nakamura IA</h2>
+                  <p className="text-zinc-500 text-sm mb-8 leading-relaxed">
+                    U-um... oi! Eu sou a Nakamura IA. Estou tentando o meu melhor para ajudar você aqui... (Será que eu falei muito alto? Ai meu Deus...)
                   </p>
 
                   <button 
                     onClick={completeWelcome}
-                    className="w-full py-4 bg-[#2A2A2A] hover:bg-[#333333] text-white rounded-xl font-bold transition-all active:scale-95 border border-white/10"
+                    className="w-full py-4 bg-[#0D0D0D] hover:bg-[#1A1A1A] text-white rounded-xl font-bold transition-all active:scale-95 shadow-sm"
                   >
-                    Vamos lá
+                    Começar Agora
                   </button>
                 </div>
               </motion.div>
@@ -498,276 +667,519 @@ export default function App() {
 
         {/* Sidebar */}
         <AnimatePresence>
-          {isSidebarOpen && (
+          {(isSidebarOpen || (typeof window !== 'undefined' && window.innerWidth >= 768)) && (
             <>
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setIsSidebarOpen(false)}
-                className="fixed inset-0 z-[150] bg-black/60 backdrop-blur-sm"
-              />
-              <motion.div 
-                initial={{ x: "-100%" }}
+              {isSidebarOpen && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsSidebarOpen(false)}
+                  className="fixed inset-0 z-[150] bg-black/20 backdrop-blur-sm md:hidden"
+                />
+              )}
+              <motion.aside 
+                initial={typeof window !== 'undefined' && window.innerWidth < 768 ? { x: "-100%" } : false}
                 animate={{ x: 0 }}
                 exit={{ x: "-100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed top-0 left-0 bottom-0 w-[280px] sm:w-[320px] z-[160] bg-[#1A1A1A] shadow-2xl flex flex-col"
+                className={cn(
+                  "fixed md:relative top-0 left-0 bottom-0 w-72 z-[160] bg-white border-r border-[#E5E5E5] flex flex-col h-screen",
+                  !isSidebarOpen && "hidden md:flex"
+                )}
               >
-                <div className="p-6 flex items-center justify-between">
-                  <h3 className="text-lg font-bold text-white">Comunidade</h3>
+                <div className="p-3 border-b border-[#E5E5E5] flex items-center justify-between">
+                  <div className="flex items-center gap-2 px-2">
+                    <div className="w-6 h-6 bg-[#0D0D0D] rounded-lg flex items-center justify-center">
+                      <img src={LOGO_URL} className="w-4 h-4 object-contain invert" alt="Logo" />
+                    </div>
+                    <span className="text-sm font-semibold text-[#0D0D0D]">Nakamura IA</span>
+                  </div>
                   <button 
                     onClick={() => setIsSidebarOpen(false)}
-                    className="p-2 hover:bg-[#2A2A2A] rounded-full text-zinc-400"
+                    className="p-2 hover:bg-[#F7F7F8] rounded-lg text-[#6E6E80] md:hidden"
                   >
-                    <X size={20} />
+                    <X size={18} />
                   </button>
                 </div>
-                
-                <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                  <div className="space-y-4">
-                    <div className="aspect-video rounded-xl overflow-hidden shadow-sm">
-                      <img 
-                        src="https://tr.rbxcdn.com/180DAY-61ac41ba6e6a114ddef418494fd4cb72/150/150/Image/Webp/noFilter" 
-                        className="w-full h-full object-cover" 
-                        alt="Roblox Game"
+
+                <div className="p-4 border-b border-[#E5E5E5]">
+                  <div className="relative group">
+                    <div className="chat-ai-input-wrapper !p-1.5 !rounded-2xl !shadow-sm !border-[#E5E5E5] border focus-within:!shadow-md transition-all">
+                      <div className="flex items-center justify-center w-7 h-7 text-[#6E6E80] group-focus-within:text-[#0D0D0D] transition-colors">
+                        <Search size={16} />
+                      </div>
+                      <input 
+                        type="text" 
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Pesquisar posts..." 
+                        className="flex-1 bg-transparent border-none outline-none text-xs text-[#0D0D0D] py-1.5"
                       />
                     </div>
-                    <div className="space-y-2">
-                      <h4 className="font-bold text-white text-sm">Kaise Studios Community</h4>
-                      <p className="text-zinc-500 text-xs leading-relaxed">
-                        Explore nossas experiências únicas e jogos de alta qualidade no Roblox.
-                      </p>
-                    </div>
-                    <a 
-                      href="https://www.roblox.com/pt/communities/188678763/Kaise-Studios#!/about" 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="w-full py-3 bg-[#2A2A2A] hover:bg-[#333333] rounded-full font-bold text-white text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
-                    >
-                      Ver no Roblox
-                      <ExternalLink size={14} />
-                    </a>
                   </div>
                 </div>
-              </motion.div>
+
+                <div className="flex-1 overflow-y-auto px-2 pt-2 space-y-4">
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-bold text-[#6E6E80] px-3 py-2 uppercase tracking-widest">Chat</div>
+                    <button 
+                      onClick={() => { setIsChatActive(true); setAiMessages([]); setIsSidebarOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                        isChatActive ? "bg-white text-[#0D0D0D] shadow-sm border border-[#E5E5E5]" : "hover:bg-[#F7F7F8] text-[#6E6E80]"
+                      )}
+                    >
+                      <Sparkles size={16} />
+                      Nova Conversa
+                    </button>
+                    <button 
+                      onClick={() => { setIsChatActive(false); setIsSidebarOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                        !isChatActive ? "bg-white text-[#0D0D0D] shadow-sm border border-[#E5E5E5]" : "hover:bg-[#F7F7F8] text-[#6E6E80]"
+                      )}
+                    >
+                      <Home size={16} />
+                      Feed Principal
+                    </button>
+                  </div>
+
+                  {chatHistory.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-bold text-[#6E6E80] px-3 py-2 uppercase tracking-widest flex items-center gap-2">
+                        <History size={10} /> Histórico
+                      </div>
+                      {chatHistory.map(item => (
+                        <button 
+                          key={item.id}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs text-[#6E6E80] hover:bg-[#F7F7F8] transition-colors truncate text-left"
+                        >
+                          <MessageSquare size={12} className="flex-shrink-0" />
+                          <span className="truncate">{item.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {user?.email === "murilosilvadacosta5ano@gmail.com" && (
+                    <div className="space-y-1 pt-2">
+                      <div className="text-[10px] font-bold text-[#6E6E80] px-3 py-2 uppercase tracking-widest flex items-center gap-2">
+                        <Key size={10} /> Desenvolvedor
+                      </div>
+                      <div className="mx-2 p-2 bg-zinc-900 rounded-lg border border-white/10">
+                        <div className="text-[10px] text-zinc-500 mb-1">Seu Token Fixo:</div>
+                        <div className="text-[10px] font-mono text-zinc-300 break-all bg-black/30 p-1.5 rounded">{SECRET_API_TOKEN}</div>
+                        <button 
+                          onClick={() => { navigator.clipboard.writeText(SECRET_API_TOKEN); setNotification("Token copiado!"); }}
+                          className="w-full mt-2 py-1 text-[10px] font-bold text-white bg-blue-600 rounded hover:bg-blue-700"
+                        >
+                          Copiar Token
+                        </button>
+                        
+                        <div className="mt-3 pt-3 border-t border-white/5 flex items-center justify-between">
+                          <span className="text-[10px] text-zinc-400">Status Local Link:</span>
+                          <div className={cn(
+                            "w-2 h-2 rounded-full animate-pulse shadow-[0_0_8px]",
+                            isLocalLinked ? "bg-green-500 shadow-green-500/50" : "bg-red-500 shadow-red-500/50"
+                          )} />
+                        </div>
+                        {isLocalLinked && (
+                          <div className="text-[9px] text-green-500 mt-1 font-bold">IA LOCAL CONECTADA</div>
+                        )}
+                        
+                        <button 
+                          onClick={async () => {
+                            const newStatus = !isLocalLinked;
+                            try {
+                              await setDoc(doc(db, 'config', 'local_bridge'), { 
+                                activeToken: newStatus ? SECRET_API_TOKEN : "" 
+                              }, { merge: true });
+                              setNotification(newStatus ? "Link Local Ativado manualmente (Simulação)" : "Link Local Desativado");
+                            } catch (e) {
+                              setNotification("Erro ao atualizar bridge Firestore");
+                            }
+                          }}
+                          className="w-full mt-2 py-1 text-[10px] font-bold text-zinc-400 hover:text-white bg-white/5 rounded transition-all"
+                        >
+                          {isLocalLinked ? "Desconectar Link" : "Testar Link Local"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-3 border-t border-[#E5E5E5]">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] font-bold text-[#6E6E80] px-1 uppercase tracking-widest">Conta</div>
+                    <a 
+                      href={COMMUNITY_URL}
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#F7F7F8] transition-colors border border-transparent hover:border-[#E5E5E5]"
+                      title="Roblox Community"
+                    >
+                      <img src={ROBLOX_LOGO_URL} className="w-5 h-5 object-contain" alt="Roblox" />
+                    </a>
+                  </div>
+                  {user ? (
+                    <div className="flex items-center justify-between p-2 rounded-xl hover:bg-[#F7F7F8] transition-colors">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <img src={user.photoURL || ""} className="w-8 h-8 rounded-full border border-[#E5E5E5]" alt="User" referrerPolicy="no-referrer" />
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-xs font-bold text-[#0D0D0D] truncate">{user.displayName}</span>
+                          <span className="text-[10px] text-[#6E6E80] truncate">{user.email}</span>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={handleLogout}
+                        className="p-2 text-[#6E6E80] hover:text-red-500 transition-colors"
+                        title="Sair"
+                      >
+                        <LogOut size={16} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={handleLogin}
+                      className="w-full h-10 bg-[#0D0D0D] text-white rounded-xl flex items-center justify-center gap-2 text-sm font-bold active:scale-95 transition-all outline-none"
+                    >
+                      <LogIn size={16} />
+                      Entrar com Google
+                    </button>
+                  )}
+                </div>
+              </motion.aside>
             </>
           )}
         </AnimatePresence>
 
-        {/* Header */}
-        <header className="sticky top-0 z-50 w-full bg-transparent">
-          <div className="max-w-5xl mx-auto px-4 h-32 flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <button 
-                onClick={() => setIsSidebarOpen(true)}
-                className="flex flex-col gap-1.5 p-3 text-white hover:bg-[#2A2A2A] rounded-full transition-colors group"
-              >
-                <div className="w-8 h-0.5 bg-white group-hover:scale-x-110 transition-transform origin-left" />
-                <div className="w-8 h-0.5 bg-white group-hover:scale-x-90 transition-transform origin-left" />
-                <div className="w-8 h-0.5 bg-white group-hover:scale-x-110 transition-transform origin-left" />
-              </button>
-              <img 
-                src={LOGO_URL} 
-                alt="Logo" 
-                className="w-48 h-48 sm:w-64 sm:h-64 object-contain invert relative -left-8 top-1"
-                referrerPolicy="no-referrer"
-              />
-            </div>
-
-            <div className="flex items-center gap-4">
-              {user ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-[10px] sm:text-xs font-black text-white uppercase tracking-tighter">Olá, {user.displayName?.split(' ')[0]}</span>
-                  <button 
-                    onClick={handleLogout}
-                    className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-[#1A1A1A] flex items-center justify-center overflow-hidden group relative shadow-lg"
-                    title="Sair"
-                  >
-                    {user.photoURL ? (
-                      <img src={user.photoURL} alt="User" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
-                    ) : (
-                      <LogOut size={20} className="text-zinc-400" />
-                    )}
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <LogOut size={16} className="text-white" />
-                    </div>
-                  </button>
-                </div>
-              ) : (
-                <button 
-                  onClick={handleLogin}
-                  className="px-6 py-2.5 rounded-full bg-[#2A2A2A] hover:bg-[#333333] flex items-center gap-2 font-bold text-sm text-white shadow-sm active:scale-95"
-                >
-                  <LogIn size={18} />
-                  <span>Entrar</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </header>
-
-        <main className="max-w-2xl mx-auto px-4 py-8">
-          {isOwner && (
-            <motion.button 
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              onClick={() => setShowPostModal(true)}
-              className="w-full mb-8 py-4 bg-[#2A2A2A] hover:bg-[#333333] rounded-2xl flex items-center justify-center gap-2 text-white font-bold shadow-sm transition-all active:scale-95"
+        {/* Main Content */}
+        <div className="flex-1 flex flex-col h-screen overflow-hidden">
+          {/* Header */}
+          <header className="h-14 flex items-center px-4 border-b border-[#E5E5E5] bg-[#F7F7F8] md:bg-transparent">
+            <button 
+              onClick={() => setIsSidebarOpen(true)}
+              className="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-white md:hidden"
             >
-              <Plus size={20} />
-              <span>Novo Post</span>
-            </motion.button>
-          )}
+              <div className="flex flex-col gap-1 w-5">
+                <div className="h-[2px] bg-[#0D0D0D]" />
+                <div className="h-[2px] bg-[#0D0D0D]" />
+                <div className="h-[2px] bg-[#0D0D0D]" />
+              </div>
+            </button>
+            <div className="flex-1 text-center md:text-left md:px-4 text-sm font-bold text-[#0D0D0D]">
+              Nakamura IA
+            </div>
+            {isOwner && (
+              <button 
+                onClick={() => setShowPostModal(true)}
+                className="w-9 h-9 flex items-center justify-center rounded-xl bg-white shadow-sm border border-[#E5E5E5] text-[#0D0D0D] hover:bg-gray-50 active:scale-90 transition-all"
+                title="Novo Post"
+              >
+                <Plus size={18} />
+              </button>
+            )}
+          </header>
 
-          {activeTab === 'feed' ? (
-            <div className="space-y-8">
-              {posts.map((post) => (
-                <motion.article 
-                  key={post.id}
-                  className="bg-[#1A1A1A] rounded-3xl overflow-hidden shadow-sm"
-                >
-                  <div className="p-8">
-                    <div className="flex items-center justify-between mb-6">
+              {/* Chat/Content Area */}
+            <main className="flex-1 overflow-y-auto chat-scroll px-4 relative flex flex-col pt-4">
+              <div className="flex-1">
+                {isChatActive ? (
+                  <div className="max-w-3xl mx-auto py-8 space-y-8 pb-32">
+                    <div className="flex items-center justify-between mb-8">
                       <div className="flex items-center gap-3">
-                        <img src={OWNER_PHOTO_URL} className="w-12 h-12 rounded-lg object-cover" alt="Author" />
-                        <div>
-                          <h4 className="font-bold text-white">Mikasa</h4>
-                          <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">
-                            {new Date(post.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
-                          </p>
-                        </div>
-                      </div>
-                      {isOwner && (
                         <button 
-                          onClick={() => setPostToDelete(post.id)} 
-                          className="w-10 h-10 flex items-center justify-center bg-[#2A2A2A] hover:bg-red-500 rounded-full text-zinc-500 hover:text-white transition-colors active:scale-90"
+                          onClick={() => setIsChatActive(false)}
+                          className="p-2 hover:bg-[#F7F7F8] rounded-full transition-colors text-[#6E6E80] border border-[#E5E5E5]"
                         >
-                          <Trash2 size={18} />
+                          <Home size={18} />
                         </button>
-                      )}
-                    </div>
-
-                    <div className="prose prose-invert max-w-none mb-6 text-zinc-200">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          a: ({ node, ...props }) => (
-                            <a 
-                              {...props} 
-                              className="inline-block px-3 py-1 bg-blue-600 text-white rounded-full no-underline font-mono text-xs hover:bg-blue-500 transition-colors"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            />
-                          )
-                        }}
+                        <h2 className="text-xl font-bold text-[#0D0D0D]">Nakamura IA</h2>
+                        {isLocalLinked && (
+                          <div className="flex items-center gap-1.5 px-2 py-0.5 bg-green-50 text-green-600 border border-green-200 rounded-full text-[10px] font-bold shadow-sm animate-pulse">
+                            <Zap size={10} fill="currentColor" />
+                            <span>LINK LOCAL ATIVO</span>
+                          </div>
+                        )}
+                      </div>
+                      <button 
+                        onClick={() => setAiMessages([])}
+                        className="text-xs font-bold text-[#6E6E80] hover:text-[#0D0D0D] px-3 py-1.5 rounded-lg border border-[#E5E5E5] transition-colors"
                       >
-                        {post.content}
-                      </ReactMarkdown>
+                        Limpar Chat
+                      </button>
                     </div>
+                    
+                    {aiMessages.map((msg, idx) => (
+                      <motion.div 
+                        key={idx}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          "flex gap-4 md:gap-6",
+                          msg.role === 'user' ? "flex-row-reverse" : ""
+                        )}
+                      >
+                        <div className={cn(
+                          "w-8 h-8 md:w-9 md:h-9 rounded-lg flex-shrink-0 flex items-center justify-center shadow-sm overflow-hidden border border-black/5",
+                          msg.role === 'assistant' ? "bg-zinc-800" : "bg-white"
+                        )}>
+                          {msg.role === 'assistant' ? (
+                            <img src={OWNER_PHOTO_URL} className="w-full h-full object-cover" alt="AI" />
+                          ) : (
+                            <img src={user?.photoURL || ""} className="w-full h-full object-cover" alt="You" />
+                          )}
+                        </div>
+                        <div className={cn(
+                          "flex-1 min-w-0 space-y-3",
+                          msg.role === 'user' ? "text-right" : ""
+                        )}>
+                          {msg.state === 'searching' && (
+                            <div className="flex items-center gap-2 text-sm text-[#6E6E80] bg-white w-fit px-4 py-2 rounded-2xl border border-[#E5E5E5] shadow-sm ml-0">
+                              <Search size={14} className="animate-pulse" />
+                              <span className="font-medium">Pesquisando informações...</span>
+                            </div>
+                          )}
 
-                    {post.imageUrl && (
-                      <div className="rounded-2xl overflow-hidden mb-6 shadow-md">
-                        <img src={post.imageUrl} alt="Post" className="w-full object-cover" />
+                          {msg.state === 'thinking' && (
+                            <div className="flex flex-col gap-3">
+                              <div className="flex items-center gap-2 text-sm text-[#6E6E80] bg-white w-fit px-4 py-2 rounded-2xl border border-[#E5E5E5] shadow-sm ml-0">
+                                <Cpu size={14} className="animate-spin" />
+                                <span className="font-medium">Pensando...</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {msg.content && (
+                            <div className={cn(
+                              "prose prose-sm md:prose-base max-w-[85%] inline-block text-left leading-relaxed px-5 py-3 rounded-[24px]",
+                              msg.role === 'user' 
+                                ? "bg-white border border-[#E5E5E5] text-[#0D0D0D] rounded-tr-none ml-auto" 
+                                : "bg-[#F7F7F8] text-[#0D0D0D] rounded-tl-none"
+                            )}>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                            </div>
+                          )}
+
+                          {msg.sources && msg.sources.length > 0 && (
+                            <div className="flex flex-wrap gap-2 pt-2">
+                              {msg.sources.map((source: any, sIdx) => (
+                                <a 
+                                  key={sIdx}
+                                  href={source.web?.uri}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-1.5 px-3 py-1 bg-white border border-[#E5E5E7] rounded-full text-[11px] font-bold text-[#6E6E80] hover:bg-gray-50 transition-colors"
+                                >
+                                  <img src={GOOGLE_SEARCH_ICON} className="w-3 h-3" alt="Source" />
+                                  <span className="max-w-[120px] truncate">{source.web?.title || 'Fonte'}</span>
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    ))}
+                    <div ref={chatEndRef} />
+                  </div>
+                ) : (
+                  <>
+                    {isLoading ? (
+                      <div className="h-full flex items-center justify-center text-[#6E6E80]">
+                        <Loader2 className="animate-spin" size={24} />
+                      </div>
+                    ) : posts.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center px-6">
+                        <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center mb-4 shadow-sm border border-[#E5E5E5]">
+                          <Cpu className="text-[#0D0D0D]" size={24} />
+                        </div>
+                        <h2 className="text-xl font-bold mb-2 text-[#0D0D0D]">A Nakamura IA está ligada</h2>
+                        <p className="text-sm text-[#6E6E80] max-w-xs">Nenhum post disponível no momento. Fique atento!</p>
+                      </div>
+                    ) : (
+                      <div className="max-w-3xl mx-auto py-8 lg:py-12 space-y-12 pb-32">
+                        {posts
+                          .filter(p => p.content.toLowerCase().includes(searchQuery.toLowerCase()))
+                          .map((post) => (
+                          <motion.div 
+                            key={post.id}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="flex gap-4 md:gap-6"
+                          >
+                            {/* ... existing post code ... */}
+                            <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800 flex-shrink-0 flex items-center justify-center shadow-sm overflow-hidden border border-black/5">
+                              <img src={OWNER_PHOTO_URL} className="w-full h-full object-cover" alt="Nakamura IA" />
+                            </div>
+                            <div className="flex-1 min-w-0 space-y-4">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-[#0D0D0D]">Nakamura IA</span>
+                                <span className="text-[10px] text-[#6E6E80] font-medium uppercase tracking-widest px-2 py-0.5 bg-white border border-[#E5E5E5] rounded-full">
+                                  {new Date(post.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                                </span>
+                                {isOwner && (
+                                  <button 
+                                    onClick={() => setPostToDelete(post.id)} 
+                                    className="ml-auto w-8 h-8 flex items-center justify-center text-[#6E6E80] hover:text-red-500 hover:bg-white rounded-lg transition-all"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                )}
+                              </div>
+
+                              <div className="prose prose-sm md:prose-base max-w-none text-[#0D0D0D] leading-relaxed">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{post.content}</ReactMarkdown>
+                              </div>
+
+                              {post.imageUrl && (
+                                <div className="rounded-2xl overflow-hidden shadow-md border border-[#E5E5E5] bg-white p-1">
+                                  <img src={post.imageUrl} alt="Post image" className="w-full rounded-xl" />
+                                </div>
+                              )}
+
+                              <div className="flex items-center gap-2 pt-2">
+                                <button 
+                                  onClick={() => handleLike(post.id)}
+                                  className={cn(
+                                    "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all active:scale-95 border",
+                                    userLikes[post.id] 
+                                      ? "bg-red-50 text-red-600 border-red-100" 
+                                      : "bg-white text-[#6E6E80] border-[#E5E5E5] hover:bg-gray-50"
+                                  )}
+                                >
+                                  <Heart size={16} fill={userLikes[post.id] ? "currentColor" : "none"} />
+                                  <span>{post.likesCount || 0}</span>
+                                </button>
+
+                                <button 
+                                  onClick={() => setFloatingCommentId(post.id)}
+                                  className="flex items-center gap-2 px-4 py-2 bg-white text-[#6E6E80] border border-[#E5E5E5] rounded-xl text-sm font-bold hover:bg-gray-50 active:scale-95 transition-all"
+                                >
+                                  <MessageSquare size={16} />
+                                  <span>Comentar</span>
+                                </button>
+
+                                <button 
+                                  onClick={() => handleShare(post.id)}
+                                  className="flex items-center gap-2 px-4 py-2 bg-white text-[#6E6E80] border border-[#E5E5E5] rounded-xl text-sm font-bold hover:bg-gray-50 active:scale-95 transition-all"
+                                >
+                                  <Share2 size={16} />
+                                  <span>Share</span>
+                                </button>
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
                       </div>
                     )}
+                  </>
+                )}
+              </div>
 
-                    <div className="flex items-center gap-4">
-                      <button 
-                        onClick={() => handleLike(post.id)}
-                        className="flex items-center gap-2 px-6 py-3 rounded-full font-bold text-sm transition-all active:scale-95 bg-[#2A2A2A] text-zinc-400 hover:bg-[#333333]"
-                      >
-                        <Heart 
-                          size={18} 
-                          fill={userLikes[post.id] ? "#ef4444" : "none"} 
-                          className={cn(
-                            "transition-colors",
-                            userLikes[post.id] ? "text-red-500 animate-pulse" : "text-zinc-400"
-                          )}
-                        />
-                        <span className={cn(userLikes[post.id] && "text-white")}>{post.likesCount || 0}</span>
-                      </button>
+              {/* AI Search Bar - ChatGPT Design */}
+              <div className={cn(
+                "chat-ai-container absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#F7F7F8] via-[#F7F7F8] to-transparent pt-12 pb-8",
+                isChatActive && "fixed"
+              )}>
+                <AnimatePresence>
+                  {!aiQuery && !isChatActive && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="chat-ai-suggestions"
+                    >
+                      {[
+                        { icon: <Sparkles size={14} className="text-orange-500" />, text: "Wiki do Roblox" },
+                        { icon: <Zap size={14} className="text-yellow-500" />, text: "Últimas notícias" },
+                        { icon: <Users size={14} className="text-blue-500" />, text: "Minha reputação" }
+                      ].map((item, idx) => (
+                        <div 
+                          key={idx} 
+                          onClick={() => { setAiQuery(item.text); }}
+                          className="chat-ai-suggestion-chip"
+                        >
+                          {item.icon}
+                          {item.text}
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-                      <button 
-                        onClick={() => setFloatingCommentId(post.id)}
-                        className="flex items-center gap-2 px-6 py-3 bg-[#2A2A2A] hover:bg-[#333333] rounded-full font-bold text-sm text-zinc-400 transition-all active:scale-95"
-                      >
-                        <MessageSquare size={18} />
-                        <span>Comentar</span>
-                      </button>
+                <div className={cn(
+                  "chat-ai-input-wrapper border border-transparent transition-all duration-300",
+                  isAiFocused ? "border-[#E5E5E5] shadow-lg scale-[1.01]" : ""
+                )}>
+                  <button className="chat-ai-icon-btn">
+                    <Paperclip size={20} />
+                  </button>
+                  
+                  <input 
+                    type="text"
+                    value={aiQuery}
+                    onChange={(e) => setAiQuery(e.target.value)}
+                    onFocus={() => setIsAiFocused(true)}
+                    onBlur={() => setIsAiFocused(false)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAiSend()}
+                    placeholder="Pergunte à Nakamura IA..."
+                    className="flex-1 bg-transparent border-none outline-none text-[16px] text-[#0D0D0D] py-2"
+                  />
 
-                      <button onClick={() => handleShare(post.id)} className="ml-auto w-12 h-12 flex items-center justify-center bg-[#2A2A2A] hover:bg-[#333333] rounded-full text-zinc-400 transition-all active:scale-95">
-                        <Share2 size={18} />
+                  <div className="flex items-center gap-1">
+                    {!aiQuery && (
+                      <button className="chat-ai-icon-btn">
+                        <Mic size={20} />
                       </button>
-                    </div>
+                    )}
+                    <button 
+                      onClick={handleAiSend}
+                      disabled={!aiQuery.trim()}
+                      className={cn(
+                        "chat-ai-icon-btn chat-ai-send-btn transition-all duration-200",
+                        aiQuery.trim() ? "opacity-100 scale-100" : "opacity-30 scale-90"
+                      )}
+                    >
+                      <ArrowUp size={20} />
+                    </button>
                   </div>
-                </motion.article>
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-8">
-              <motion.div 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-[#1A1A1A] rounded-2xl p-8 shadow-sm border border-white/5"
-              >
-                <div className="flex flex-col items-center text-center">
-                  <div className="w-full aspect-video rounded-xl overflow-hidden mb-6 shadow-sm border border-white/5">
-                    <img 
-                      src="https://tr.rbxcdn.com/180DAY-61ac41ba6e6a114ddef418494fd4cb72/150/150/Image/Webp/noFilter" 
-                      className="w-full h-full object-cover" 
-                      alt="Roblox Game"
-                    />
-                  </div>
-                  <h3 className="text-2xl font-bold mb-2 text-white">Kaise Studios Community</h3>
-                  <p className="text-zinc-400 text-sm mb-6 max-w-md">
-                    Explore nossas experiências únicas, jogos de alta qualidade e aventuras inesquecíveis dentro do Roblox.
-                  </p>
-                  <a 
-                    href="https://www.roblox.com/pt/communities/188678763/Kaise-Studios#!/about" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="w-full py-4 bg-[#2A2A2A] hover:bg-[#333333] rounded-lg font-bold text-white flex items-center justify-center gap-2 transition-all active:scale-95 border border-white/10"
-                  >
-                    Ver no Roblox
-                    <ExternalLink size={18} />
-                  </a>
                 </div>
-              </motion.div>
-            </div>
-          )}
-        </main>
+              </div>
+            </main>
 
-        {/* Floating Navigation Bar removed as per request */}
+          {/* Bottom Bar Info */}
+          <div className="px-6 py-4 bg-[#F7F7F8]">
+            <p className="text-[11px] text-[#6E6E80] text-center max-w-sm mx-auto">
+              Nakamura IA está tentando o seu melhor hoje! (P-por favor, não repare se eu gaguejar...)
+            </p>
+          </div>
+        </div>
 
-        {/* Floating Comments Modal */}
+        {/* Modals and Overlays */}
         <AnimatePresence>
           {floatingCommentId && (
-            <div className="fixed inset-0 z-[150] flex items-end sm:items-center justify-center p-4">
+            <div className="fixed inset-0 z-[250] flex items-end sm:items-center justify-center p-4">
               <motion.div 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setFloatingCommentId(null)}
-                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
               />
               <motion.div 
-                initial={{ y: "100%" }}
-                animate={{ y: 0 }}
-                exit={{ y: "100%" }}
-                className="relative w-full max-w-lg liquid-glass rounded-[40px] p-8 shadow-2xl max-h-[85vh] overflow-hidden flex flex-col"
+                initial={{ y: "100%", opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: "100%", opacity: 0 }}
+                className="relative w-full max-w-lg bg-white rounded-[32px] p-6 md:p-8 shadow-2xl flex flex-col max-h-[85vh]"
               >
                 <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-xl font-bold">Comentários</h3>
-                  <button 
-                    onClick={() => setFloatingCommentId(null)}
-                    className="p-2 hover:bg-white/20 rounded-full transition-colors liquid-refraction"
-                  >
+                  <h3 className="text-lg font-bold text-[#0D0D0D]">Comentários</h3>
+                  <button onClick={() => setFloatingCommentId(null)} className="p-2 hover:bg-[#F7F7F8] rounded-full transition-colors text-[#6E6E80]">
                     <X size={20} />
                   </button>
                 </div>
-
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar">
+                <div className="flex-1 overflow-y-auto px-1 chat-scroll min-h-0">
                   <PostComments postId={floatingCommentId} user={user} isOwner={isOwner} />
                 </div>
               </motion.div>
@@ -775,116 +1187,103 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Delete Confirmation Modal */}
         <AnimatePresence>
           {postToDelete && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
               <motion.div 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setPostToDelete(null)}
-                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
               />
               <motion.div 
                 initial={{ scale: 0.9, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
-                className="relative w-full max-w-sm bg-[#1A1A1A] rounded-3xl p-8 shadow-2xl border border-white/5 text-center"
+                className="relative w-full max-w-sm bg-white rounded-[32px] p-8 shadow-2xl border border-black/5 text-center"
               >
-                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
                   <Trash2 className="text-red-500" size={32} />
                 </div>
-                <h3 className="text-xl font-bold text-white mb-2">Excluir Post?</h3>
-                <p className="text-zinc-400 text-sm mb-8">
-                  Esta ação é permanente e não pode ser desfeita. O post e todos os seus comentários serão removidos.
+                <h3 className="text-xl font-bold text-[#0D0D0D] mb-2">Excluir Post?</h3>
+                <p className="text-[#6E6E80] text-sm mb-8 leading-relaxed">
+                  Esta ação excluirá permanentemente o post e todos os seus comentários.
                 </p>
                 <div className="flex gap-3">
-                  <button 
-                    onClick={() => setPostToDelete(null)}
-                    className="flex-1 py-3 bg-[#2A2A2A] hover:bg-[#333333] rounded-xl font-bold text-white transition-all active:scale-95"
-                  >
+                  <button onClick={() => setPostToDelete(null)} className="flex-1 py-3 bg-[#F7F7F8] hover:bg-[#EFEFEF] rounded-xl font-bold text-[#0D0D0D] transition-all">
                     Cancelar
                   </button>
-                  <button 
-                    onClick={() => handleDelete(postToDelete)}
-                    className="flex-1 py-3 bg-red-500 hover:bg-red-600 rounded-xl font-bold text-white transition-all active:scale-95 shadow-lg shadow-red-500/20"
-                  >
-                    Excluir
+                  <button onClick={() => handleDelete(postToDelete)} className="flex-1 py-3 bg-red-500 hover:bg-red-600 rounded-xl font-bold text-white transition-all shadow-lg shadow-red-500/20">
+                    Confirmar
                   </button>
                 </div>
               </motion.div>
             </div>
           )}
         </AnimatePresence>
-        
-        {/* Post Creation Modal */}
+
         <AnimatePresence>
           {showPostModal && (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
               <motion.div 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setShowPostModal(false)}
-                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
               />
               <motion.div 
                 initial={{ scale: 0.9, opacity: 0, y: 20 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
                 exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                className="relative w-full max-w-lg bg-[#1A1A1A] rounded-3xl p-8 shadow-2xl overflow-hidden border border-white/10"
+                className="relative w-full max-w-lg bg-white rounded-[32px] p-8 shadow-2xl border border-[#E5E5E5]"
               >
                 <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-xl font-bold text-white">Criar novo post</h3>
-                  <button 
-                    onClick={() => setShowPostModal(false)}
-                    className="p-2 hover:bg-white/10 rounded-full transition-colors text-white"
-                  >
+                  <h3 className="text-xl font-bold text-[#0D0D0D]">Novo Post</h3>
+                  <button onClick={() => setShowPostModal(false)} className="p-2 hover:bg-[#F7F7F8] rounded-full transition-colors text-[#6E6E80]">
                     <X size={20} />
                   </button>
                 </div>
 
-                <textarea 
-                  value={newPost}
-                  onChange={(e) => setNewPost(e.target.value)}
-                  placeholder="O que há de novo na Kaise Studios?"
-                  className="w-full bg-[#0A0A0A] border border-white/5 rounded-2xl p-6 min-h-[160px] focus:ring-0 transition-all resize-none mb-6 text-white placeholder:text-zinc-600"
-                />
+                <div className="space-y-6">
+                  <div className="input-pill bg-[#F7F7F8] rounded-2xl p-4 transition-all focus-within:bg-white focus-within:ring-2 ring-[#E5E5E5]">
+                    <textarea 
+                      value={newPost}
+                      onChange={(e) => setNewPost(e.target.value)}
+                      placeholder="O que Nakamura IA tem para hoje?"
+                      className="w-full bg-transparent border-none p-0 min-h-[140px] focus:ring-0 text-[15px] text-[#0D0D0D] resize-none"
+                    />
+                  </div>
 
-                {imagePreview && (
-                  <div className="relative mb-6 rounded-xl overflow-hidden aspect-video shadow-md border border-white/5">
-                    <img src={imagePreview} className="w-full h-full object-cover" alt="Preview" />
+                  {imagePreview && (
+                    <div className="relative rounded-xl overflow-hidden aspect-video border border-[#E5E5E5]">
+                      <img src={imagePreview} className="w-full h-full object-cover" alt="Preview" />
+                      <button onClick={() => { setImageFile(null); setImagePreview(null); }} className="absolute top-2 right-2 p-1.5 bg-black/60 text-white rounded-full hover:bg-red-500 transition-colors">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center justify-between pt-2">
                     <button 
-                      onClick={() => {
-                        setImageFile(null);
-                        setImagePreview(null);
-                      }}
-                      className="absolute top-2 right-2 p-1.5 bg-black/60 text-white rounded-full hover:bg-red-500 transition-colors"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-2 px-5 py-3 bg-[#F7F7F8] hover:bg-[#EFEFEF] text-[#0D0D0D] rounded-xl font-bold text-sm transition-all"
                     >
-                      <X size={14} />
+                      <Plus size={20} />
+                      <span>Adicionar Imagem</span>
+                    </button>
+
+                    <button 
+                      onClick={handlePost}
+                      disabled={isUploading || (!newPost.trim() && !imageFile)}
+                      className="px-8 py-3 bg-[#0D0D0D] hover:bg-[#1A1A1A] text-white rounded-xl font-bold text-sm disabled:opacity-50 transition-all shadow-md active:scale-95"
+                    >
+                      {isUploading ? <Loader2 className="animate-spin" size={20} /> : "Publicar"}
                     </button>
                   </div>
-                )}
-                
-                <div className="flex items-center justify-between">
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-2 px-6 py-3 bg-[#2A2A2A] hover:bg-[#333333] text-white rounded-xl font-bold text-sm transition-all active:scale-95 border border-white/5"
-                  >
-                    <ImageIcon size={20} />
-                    <span>Mídia</span>
-                  </button>
-
-                  <button 
-                    onClick={handlePost}
-                    disabled={isUploading || (!newPost.trim() && !imageFile)}
-                    className="px-10 py-3 bg-[#2A2A2A] hover:bg-[#333333] text-white rounded-xl font-bold text-sm disabled:opacity-50 transition-all active:scale-95 border border-white/5"
-                  >
-                    {isUploading ? <Loader2 className="animate-spin" size={20} /> : "Publicar"}
-                  </button>
+                  <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageChange} />
                 </div>
-                <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleImageChange} />
               </motion.div>
             </div>
           )}
