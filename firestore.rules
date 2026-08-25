@@ -2,20 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: posts
-    // Document ID: auto-generated
-    // Fields:
-    //   - content: string (required, 1-5000 chars) - The post text
-    //   - imageUrl: string (optional, URL) - Optional image
-    //   - createdAt: string (required, ISO 8601) - Creation timestamp
-    //   - authorId: string (required) - UID of the creator
-    //
-    // ===============================================================
-
-    // ===============================================================
     // Helper Functions
     // ===============================================================
     
@@ -83,19 +69,14 @@ service cloud.firestore {
       let oldLikes = resource.data.get('likesCount', 0);
       let newLikes = request.resource.data.likesCount;
       
-      // Allow update only if 'likesCount' is the ONLY field changing
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount']) &&
-             // And the change is exactly +1 or -1
              newLikes is number &&
              newLikes >= 0 &&
              math.abs(newLikes - oldLikes) == 1 &&
-             // Verify consistency:
              (
-               // Increment: Like must NOT exist before, but MUST exist after
                (newLikes > oldLikes &&
                 !exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)) &&
                 existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid))) ||
-               // Decrement: Like MUST exist before, but must NOT exist after
                (newLikes < oldLikes &&
                 exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)) &&
                 !existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)))
@@ -110,8 +91,6 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isAdmin() && isValidPost(request.resource.data);
       allow delete: if isAdmin();
-      
-      // Allow users to update the likesCount counter
       allow update: if isAuthenticated() && isValidCounterUpdate(postId);
 
       match /likes/{userId} {
@@ -130,6 +109,20 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Contas criadas com Token + Senha
+    match /accounts/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId);
+      allow delete: if isAdmin();
+    }
+
+    // Config (bridge local etc)
+    match /config/{docId} {
+      allow read: if true;
       allow write: if isAdmin();
     }
     
