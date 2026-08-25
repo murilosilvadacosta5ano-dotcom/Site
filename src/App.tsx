@@ -57,6 +57,7 @@ import remarkGfm from 'remark-gfm';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { cn } from './lib/utils';
 import React from 'react';
+import AuthModal from './components/AuthModal';
 
 // Constants
 const GOOGLE_SEARCH_ICON = "https://www.google.com/favicon.ico";
@@ -293,6 +294,7 @@ export default function App() {
   const [apiToken, setApiToken] = useState<string | null>(SECRET_API_TOKEN);
   const [chatHistory, setChatHistory] = useState<{id: string, title: string}[]>([]);
   const [isLocalLinked, setIsLocalLinked] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -468,7 +470,7 @@ export default function App() {
 
   const handleLike = async (postId: string) => {
     if (!user) {
-      handleLogin();
+      setShowAuthModal(true);
       return;
     }
 
@@ -502,7 +504,6 @@ export default function App() {
   const handleShare = (postId: string) => {
     const url = `${window.location.origin}/post/${postId}`;
     navigator.clipboard.writeText(url);
-    // Simple toast-like feedback could be added here
   };
 
   const isOwner = user ? OWNER_EMAILS.includes(user.email || "") : false;
@@ -519,7 +520,6 @@ export default function App() {
 
     const simple = isSimpleQuestion(userMsg);
 
-    // Initial state
     const aiResponseSlot = { 
       role: 'assistant' as const, 
       content: "", 
@@ -544,7 +544,6 @@ export default function App() {
           return last;
         });
       } else {
-        // Just "pensando" wait
         await new Promise(r => setTimeout(r, 600));
       }
 
@@ -571,7 +570,6 @@ export default function App() {
         return last;
       });
 
-      // Save to local history if it's the first message
       if (aiMessages.length === 0) {
         const newHistory = [{id: Date.now().toString(), title: userMsg.substring(0, 30)}, ...chatHistory].slice(0, 10);
         setChatHistory(newHistory);
@@ -584,7 +582,6 @@ export default function App() {
       
       if (isQuotaError) {
         setNotification("hm acabou seus token desculpa!");
-        // Remove the empty thinking/searching bubble on quota error
         setAiMessages(prev => prev.slice(0, -1));
       } else {
         setAiMessages(prev => {
@@ -625,6 +622,13 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Auth Modal (Token + Senha) */}
+        <AuthModal 
+          isOpen={showAuthModal} 
+          onClose={() => setShowAuthModal(false)}
+          onSuccess={() => setNotification("Login realizado com sucesso!")}
+        />
 
         {/* Welcome Sheet */}
         <AnimatePresence>
@@ -827,7 +831,7 @@ export default function App() {
                       <div className="flex items-center gap-3 min-w-0">
                         <img src={user.photoURL || ""} className="w-8 h-8 rounded-full border border-[#E5E5E5]" alt="User" referrerPolicy="no-referrer" />
                         <div className="flex flex-col min-w-0">
-                          <span className="text-xs font-bold text-[#0D0D0D] truncate">{user.displayName}</span>
+                          <span className="text-xs font-bold text-[#0D0D0D] truncate">{user.displayName || user.email}</span>
                           <span className="text-[10px] text-[#6E6E80] truncate">{user.email}</span>
                         </div>
                       </div>
@@ -840,13 +844,22 @@ export default function App() {
                       </button>
                     </div>
                   ) : (
-                    <button 
-                      onClick={handleLogin}
-                      className="w-full h-10 bg-[#0D0D0D] text-white rounded-xl flex items-center justify-center gap-2 text-sm font-bold active:scale-95 transition-all outline-none"
-                    >
-                      <LogIn size={16} />
-                      Entrar com Google
-                    </button>
+                    <div className="space-y-2">
+                      <button 
+                        onClick={() => setShowAuthModal(true)}
+                        className="w-full h-10 bg-[#0D0D0D] text-white rounded-xl flex items-center justify-center gap-2 text-sm font-bold active:scale-95 transition-all outline-none"
+                      >
+                        <Key size={16} />
+                        Entrar com Token
+                      </button>
+                      <button 
+                        onClick={handleLogin}
+                        className="w-full h-9 bg-white border border-[#E5E5E5] text-[#0D0D0D] rounded-xl flex items-center justify-center gap-2 text-xs font-bold active:scale-95 transition-all outline-none hover:bg-[#F7F7F8]"
+                      >
+                        <LogIn size={14} />
+                        Entrar com Google
+                      </button>
+                    </div>
                   )}
                 </div>
               </motion.aside>
@@ -1008,7 +1021,6 @@ export default function App() {
                             animate={{ opacity: 1, y: 0 }}
                             className="flex gap-4 md:gap-6"
                           >
-                            {/* ... existing post code ... */}
                             <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-zinc-800 flex-shrink-0 flex items-center justify-center shadow-sm overflow-hidden border border-black/5">
                               <img src={OWNER_PHOTO_URL} className="w-full h-full object-cover" alt="Nakamura IA" />
                             </div>
@@ -1077,7 +1089,7 @@ export default function App() {
                 )}
               </div>
 
-              {/* AI Search Bar - ChatGPT Design */}
+              {/* AI Search Bar */}
               <div className={cn(
                 "chat-ai-container absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#F7F7F8] via-[#F7F7F8] to-transparent pt-12 pb-8",
                 isChatActive && "fixed"
